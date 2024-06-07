@@ -47,6 +47,7 @@ template<class Plugin> class plugin_mixin_common : public Plugin
     std::string m_str_storage;
     std::string m_last_err_storage;
     falcosecurity::init_schema m_init_schema_storage;
+    std::vector<falcosecurity::_internal::ss_plugin_metric> m_metrics_storage;
 
     FALCOSECURITY_INLINE
     const char* get_required_api_version() noexcept
@@ -148,6 +149,30 @@ template<class Plugin> class plugin_mixin_common : public Plugin
         return ss_plugin_rc::SS_PLUGIN_FAILURE;
     }
 
+    FALCOSECURITY_INLINE
+    ss_plugin_metric* get_metrics(uint32_t* num_metrics) noexcept
+    {
+        m_metrics_storage.clear();
+        auto metrics = _get_metrics(static_cast<Plugin*>(this));
+
+        if(metrics)
+        {
+            for(const auto& metric : *metrics)
+            {
+                falcosecurity::_internal::ss_plugin_metric m;
+                m.name = metric.name.c_str();
+                m.type = metric.type;
+                m.value = metric.value;
+                m.value_type = metric.value_type;
+
+                m_metrics_storage.push_back(m);
+            }
+        }
+
+        *num_metrics = m_metrics_storage.size();
+        return m_metrics_storage.data();
+    }
+
     private:
     template<typename T>
     FALCOSECURITY_INLINE auto _destroy(T* o) -> decltype(o->destroy())
@@ -225,9 +250,26 @@ template<class Plugin> class plugin_mixin_common : public Plugin
     }
 
     FALCOSECURITY_INLINE
-    auto _set_config(falcosecurity::set_config_input& in, ...) -> bool
+    auto _set_config(...) -> bool
     {
         return false;
+    }
+
+    template<typename T>
+    FALCOSECURITY_INLINE auto _get_metrics(T* o) 
+            -> decltype(o->get_metrics())
+    {
+        static_assert(
+                std::is_same<std::vector<falcosecurity::metric>* (T::*)(),
+                             decltype(&T::get_metrics)>::value,
+                "expected signature: std::vector<falcosecurity::metric>* get_metrics()");
+        return o->get_metrics();
+    }
+
+    FALCOSECURITY_INLINE
+    auto _get_metrics(...) -> std::vector<falcosecurity::metric>*
+    {
+        return nullptr;
     }
 };
 
