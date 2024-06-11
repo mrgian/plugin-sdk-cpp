@@ -21,6 +21,7 @@ limitations under the License.
 #include <falcosecurity/internal/conversions.h>
 #include <falcosecurity/internal/hacks.h>
 #include <falcosecurity/types.h>
+#include <iostream>
 
 namespace falcosecurity
 {
@@ -202,6 +203,7 @@ class table_stale_entry
     const table_writer* m_writer;
 
     friend class table;
+    friend class table_init_input;
 };
 
 class table_field
@@ -433,6 +435,7 @@ class table
         _internal::write_state_data<T>(m_data, key);
         auto res = static_cast<table_entry>(
                 r.m_reader->get_table_entry(m_table, &m_data));
+
         if(!res)
         {
             std::string msg = "can't get table entry";
@@ -445,6 +448,30 @@ class table
             throw plugin_exception(msg);
         }
         return res;
+    }
+
+    template<typename T>
+    FALCOSECURITY_INLINE table get_subtable(const table_reader& r, table_field& f, state_value_type t,
+                                               const T& key)
+    {
+        auto entry = get_entry(r, key);
+
+        _internal::ss_plugin_table_t* subtable_ptr;
+        f.read_value(r, entry, subtable_ptr);
+        
+        if(!subtable_ptr)
+        {
+            std::string msg = "can't get subtable";
+            auto err = r.m_get_owner_last_error(r.m_owner);
+            if(err)
+            {
+                msg += ": ";
+                msg += err;
+            }
+            throw plugin_exception(msg);
+        }
+
+        return table(f.get_name(), t, subtable_ptr);;
     }
 
     FALCOSECURITY_INLINE
