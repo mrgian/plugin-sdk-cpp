@@ -94,7 +94,8 @@ class my_plugin
         m_threads_field_file_descriptor = m_threads_table.get_field(t.fields(), "file_descriptors", st::SS_PLUGIN_ST_TABLE);
 
         m_file_descriptor_field_name = t.get_subtable_field(m_threads_table, m_threads_field_file_descriptor, "name", st::SS_PLUGIN_ST_STRING);
-        m_file_descriptor_field_inode = t.get_subtable_field(m_threads_table, m_threads_field_file_descriptor, "ino", st::SS_PLUGIN_ST_UINT64);
+        m_file_descriptor_field_fd = t.get_subtable_field(m_threads_table, m_threads_field_file_descriptor, "fd", st::SS_PLUGIN_ST_INT64);
+        m_file_descriptor_field_fdtype = t.get_subtable_field(m_threads_table, m_threads_field_file_descriptor, "type", st::SS_PLUGIN_ST_UINT8);
 
         falcosecurity::metric m("dummy_metric", falcosecurity::metric_type::SS_PLUGIN_METRIC_TYPE_NON_MONOTONIC);
         m.set_value(-123.001);
@@ -127,25 +128,28 @@ class my_plugin
 
             auto size = fd_table.get_size(tr);
 
-            std::cerr << "-------- FD table for TID: " << (int64_t)evt.get_tid() << " size: " << size <<"----------" << std::endl;
-            for(int i = 0; i < size; i++)
+            if (size > 0)
             {
-                auto e = fd_table.get_entry(tr, (int64_t)i);
-
-                std::string name = "hello";
-                m_file_descriptor_field_name.write_value(tw, e, name);
-
-                uint64_t inode;
-                m_file_descriptor_field_inode.write_value(tw, e, 123);
-
-                if(!name.empty())
+                std::cerr << "-------- FD table for TID: " << (int64_t)evt.get_tid() << " size: " << size <<"----------" << std::endl;
+                for(int i = 0; i < size; i++)
                 {
-                   std::cerr << "name: " << name << std::endl;         
-                }
+                    auto e = fd_table.get_entry(tr, (int64_t)i);
 
-                //std::cerr << "inode: " << inode << std::endl;
+                    std::string name;
+                    m_file_descriptor_field_name.read_value(tr, e, name);
+
+                    uint8_t fdtype = 128;
+                    m_file_descriptor_field_fdtype.read_value(tr, e, fdtype);
+
+                    int64_t fd = 123456;
+                    m_file_descriptor_field_fd.read_value(tr, e, fd);
+
+                    std::cerr << "fd: " << std::to_string(fd) << std::endl;
+                    std::cerr << "fdtype: " << std::to_string(fdtype) << std::endl;
+                    std::cerr << "name: " << name << std::endl << std::endl;       
+                }
+                std::cerr << "----------------------------" << std::endl;
             }
-            std::cerr << "----------------------------" << std::endl;
 
             //update 'evt_count' metric
             m_metrics.at(1).set_value(count);
@@ -171,7 +175,8 @@ class my_plugin
 
     falcosecurity::table_field m_file_descriptor_field_name;
     falcosecurity::table_field m_file_descriptor_field_pid;
-    falcosecurity::table_field m_file_descriptor_field_inode;
+    falcosecurity::table_field m_file_descriptor_field_fdtype;
+    falcosecurity::table_field m_file_descriptor_field_fd;
     falcosecurity::table_field m_file_descriptor_field_old_name;
 
     falcosecurity::logger logger;

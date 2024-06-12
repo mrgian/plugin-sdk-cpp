@@ -66,6 +66,8 @@ struct table_field_info
     bool read_only;
 };
 
+class table;
+
 class table_fields
 {
     public:
@@ -121,6 +123,7 @@ class table_reader
     const char* (*m_get_owner_last_error)(_internal::ss_plugin_owner_t* o);
 
     friend class table;
+    friend class table_entry;
     friend class table_field;
 };
 
@@ -154,7 +157,62 @@ class table_writer
     friend class table_field;
 };
 
-using table_entry = _internal::ss_plugin_table_entry_t*;
+class table_entry
+{
+    public:
+    FALCOSECURITY_INLINE
+    table_entry(table_entry&& o)
+    {
+        m_entry = o.m_entry;
+        m_table = o.m_table;
+        m_reader = o.m_reader;
+        o.m_entry = nullptr;
+    };
+    FALCOSECURITY_INLINE
+    table_entry& operator=(table_entry&& o)
+    {
+        m_entry = o.m_entry;
+        m_table = o.m_table;
+        m_reader = o.m_reader;
+        o.m_entry = nullptr;
+        return *this;
+    };
+    FALCOSECURITY_INLINE
+    table_entry(const table_entry&) = delete;
+    FALCOSECURITY_INLINE
+    table_entry& operator=(const table_entry&) = delete;
+    FALCOSECURITY_INLINE
+    ~table_entry()
+    {
+        if(m_entry && m_reader->m_reader)
+        {
+            m_reader->m_reader->release_table_entry(m_table, m_entry);
+        }
+    }
+
+    FALCOSECURITY_INLINE
+    table_entry(_internal::ss_plugin_table_entry_t* e, _internal::ss_plugin_table_t* t,
+                      const table_reader& w):
+            m_entry(e),
+            m_table(t), m_reader(&w)
+    {
+    }
+    FALCOSECURITY_INLINE
+    table_entry(_internal::ss_plugin_table_entry_t* e, _internal::ss_plugin_table_t* t):
+            m_entry(e),
+            m_table(t),  m_reader(nullptr)
+    {
+    }
+
+private:
+    _internal::ss_plugin_table_entry_t* m_entry;
+    _internal::ss_plugin_table_t* m_table;
+    const table_reader* m_reader;
+
+    friend class table;
+    friend class table_field;
+    friend class table_init_input;
+};
 
 class table_stale_entry
 {
@@ -191,18 +249,19 @@ class table_stale_entry
 
     private:
     FALCOSECURITY_INLINE
-    table_stale_entry(table_entry e, _internal::ss_plugin_table_t* t,
+    table_stale_entry(_internal::ss_plugin_table_entry_t* e, _internal::ss_plugin_table_t* t,
                       const table_writer& w):
             m_entry(e),
             m_table(t), m_writer(&w)
     {
     }
 
-    table_entry m_entry;
+    _internal::ss_plugin_table_entry_t* m_entry;
     _internal::ss_plugin_table_t* m_table;
     const table_writer* m_writer;
 
     friend class table;
+    friend class table_field;
     friend class table_init_input;
 };
 
@@ -211,16 +270,14 @@ class table_field
     public:
     FALCOSECURITY_INLINE
     table_field():
-            table_field("", _internal::ss_plugin_state_type::SS_PLUGIN_ST_INT8,
-                        NULL, NULL)
+            table_field("", _internal::ss_plugin_state_type::SS_PLUGIN_ST_INT8, NULL)
     {
     }
     FALCOSECURITY_INLINE
     table_field(const std::string& n, _internal::ss_plugin_state_type ft,
-                _internal::ss_plugin_table_t* t,
                 _internal::ss_plugin_table_field_t* f):
             m_name(n),
-            m_field_type(ft), m_table(t), m_field(f)
+            m_field_type(ft), m_field(f)
     {
     }
     FALCOSECURITY_INLINE
@@ -242,11 +299,11 @@ class table_field
     }
 
     template<typename T>
-    FALCOSECURITY_INLINE void read_value(const table_reader& r, table_entry e,
+    FALCOSECURITY_INLINE void read_value(const table_reader& r, const table_entry& e,
                                          T& out)
     {
         check_type(out);
-        auto res = r.m_reader->read_entry_field(m_table, e, m_field, &m_data);
+        auto res = r.m_reader->read_entry_field(e.m_table, e.m_entry, m_field, &m_data);
         if(res != result_code::SS_PLUGIN_SUCCESS)
         {
             std::string msg = "can't read table field at entry";
@@ -262,12 +319,52 @@ class table_field
     }
 
     template<typename T>
-    FALCOSECURITY_INLINE void write_value(const table_writer& w, table_entry e,
+    FALCOSECURITY_INLINE void read_value(const table_reader& r, const table_stale_entry& e,
+                                         T& out)
+    {
+        check_type(out);
+        auto res = r.m_reader->read_entry_field(e.m_table, e.m_entry, m_field, &m_data);
+        if(res != result_code::SS_PLUGIN_SUCCESS)
+        {
+            std::string msg = "can't read table field at entry";
+            auto err = r.m_get_owner_last_error(r.m_owner);
+            if(err)
+            {
+                msg += ": ";
+                msg += err;
+            }
+            throw plugin_exception(msg);
+        }
+        _internal::read_state_data<T>(m_data, out);
+    }
+
+    template<typename T>
+    FALCOSECURITY_INLINE void write_value(const table_writer& w, const table_entry& e,
                                           const T& in)
     {
         check_type(in);
         _internal::write_state_data<T>(m_data, in);
-        auto res = w.m_writer->write_entry_field(m_table, e, m_field, &m_data);
+        auto res = w.m_writer->write_entry_field(e.m_table, e.m_entry, m_field, &m_data);
+        if(res != result_code::SS_PLUGIN_SUCCESS)
+        {
+            std::string msg = "can't write table field at entry";
+            auto err = w.m_get_owner_last_error(w.m_owner);
+            if(err)
+            {
+                msg += ": ";
+                msg += err;
+            }
+            throw plugin_exception(msg);
+        }
+    }
+
+    template<typename T>
+    FALCOSECURITY_INLINE void write_value(const table_writer& w, const table_stale_entry& e,
+                                          const T& in)
+    {
+        check_type(in);
+        _internal::write_state_data<T>(m_data, in);
+        auto res = w.m_writer->write_entry_field(e.m_table, e.m_entry, m_field, &m_data);
         if(res != result_code::SS_PLUGIN_SUCCESS)
         {
             std::string msg = "can't write table field at entry";
@@ -294,7 +391,6 @@ class table_field
 
     std::string m_name;
     _internal::ss_plugin_state_type m_field_type;
-    _internal::ss_plugin_table_t* m_table;
     _internal::ss_plugin_table_field_t* m_field;
     _internal::ss_plugin_state_data m_data;
 };
@@ -372,8 +468,7 @@ class table
             throw plugin_exception(msg);
         }
         return table_field(name,
-                           static_cast<_internal::ss_plugin_state_type>(t),
-                           m_table, res);
+                           static_cast<_internal::ss_plugin_state_type>(t), res);
     }
 
     FALCOSECURITY_INLINE
@@ -395,8 +490,7 @@ class table
             throw plugin_exception(msg);
         }
         return table_field(name,
-                           static_cast<_internal::ss_plugin_state_type>(t),
-                           m_table, res);
+                           static_cast<_internal::ss_plugin_state_type>(t), res);
     }
 
     FALCOSECURITY_INLINE
@@ -433,7 +527,7 @@ class table
     {
         check_type(key);
         _internal::write_state_data<T>(m_data, key);
-        auto res = static_cast<table_entry>(
+        auto res = static_cast<_internal::ss_plugin_table_entry_t*>(
                 r.m_reader->get_table_entry(m_table, &m_data));
 
         if(!res)
@@ -447,7 +541,7 @@ class table
             }
             throw plugin_exception(msg);
         }
-        return res;
+        return table_entry(res, m_table, r);
     }
 
     template<typename T>
@@ -471,7 +565,7 @@ class table
             throw plugin_exception(msg);
         }
 
-        return table(f.get_name(), t, subtable_ptr);;
+        return table(f.get_name(), t, subtable_ptr);
     }
 
     FALCOSECURITY_INLINE
@@ -529,13 +623,13 @@ class table
     }
 
     template<typename T>
-    FALCOSECURITY_INLINE table_entry add_entry(const table_writer& w,
+    FALCOSECURITY_INLINE table_entry add_entry(const table_reader& r, const table_writer& w,
                                                const T& key,
                                                table_stale_entry&& e)
     {
         check_type(key);
         _internal::write_state_data<T>(m_data, key);
-        auto res = static_cast<table_entry>(
+        auto res = static_cast<_internal::ss_plugin_table_entry_t*>(
                 w.m_writer->add_table_entry(m_table, &m_data, e.m_entry));
         if(!res)
         {
@@ -549,22 +643,17 @@ class table
             throw plugin_exception(msg);
         }
         e.m_entry = NULL;
-        return res;
+        return table_entry(res, m_table, r);
     }
 
-    FALCOSECURITY_INLINE void release_entry(const table_reader& r,
-                                            table_entry e)
-    {
-        r.m_reader->release_table_entry(m_table, e);
-    }
-
-    using table_iterator_func_t = std::function<bool(table_entry)>;
+    using table_iterator_func_t = std::function<bool(const table_entry&)>;
 
     FALCOSECURITY_INLINE bool iterate_entries(const table_reader& r,
                                               table_iterator_func_t f)
     {
         table_iterator_state_t s;
         s.func = f;
+        s.table = m_table;
 
         auto res = r.m_reader->iterate_entries(m_table,
                                                iterate_entries_internal, &s);
@@ -595,6 +684,7 @@ class table
 
     struct table_iterator_state_t
     {
+        _internal::ss_plugin_table_t* table;
         table_iterator_func_t func;
     };
 
@@ -603,13 +693,16 @@ class table
                              _internal::ss_plugin_table_entry_t* e)
     {
         table_iterator_state_t* state = static_cast<table_iterator_state_t*>(s);
-        return state->func(static_cast<table_entry>(e)) ? 1 : 0;
+        table_entry entry(e, state->table);
+        return state->func(entry) ? 1 : 0;
     }
 
     std::string m_name;
     _internal::ss_plugin_state_type m_key_type;
     _internal::ss_plugin_table_t* m_table;
     _internal::ss_plugin_state_data m_data;
+
+    friend class table_field;
 };
 
 }; // namespace falcosecurity

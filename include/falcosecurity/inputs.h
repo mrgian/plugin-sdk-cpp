@@ -126,7 +126,7 @@ class table_init_input
         auto entry = main_table.create_entry(m_writer);
 
         _internal::ss_plugin_table_t* subtable_ptr;
-        field.read_value(m_reader, entry.m_entry, subtable_ptr);
+        field.read_value(m_reader, entry, subtable_ptr);
 
         auto subtable = table(field.get_name(), field.get_field_type(), subtable_ptr);
 
